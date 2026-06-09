@@ -1,10 +1,11 @@
 import { openDB, IDBPDatabase } from 'idb';
-import { TrainingPlan, UserSettings } from '@/types/training';
+import { TrainingPlan, UserSettings, PlanSnapshot } from '@/types/training';
 
 const DB_NAME = 'marathon-training-db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_PLANS = 'trainingPlans';
 const STORE_SETTINGS = 'userSettings';
+const STORE_SNAPSHOTS = 'planSnapshots';
 
 interface DBSchema {
   trainingPlans: {
@@ -15,6 +16,11 @@ interface DBSchema {
   userSettings: {
     key: string;
     value: { key: string; value: UserSettings };
+  };
+  planSnapshots: {
+    key: string;
+    value: PlanSnapshot;
+    indexes: { 'by-planId': string; 'by-createdAt': string };
   };
 }
 
@@ -30,6 +36,11 @@ function getDB(): Promise<IDBPDatabase<DBSchema>> {
         }
         if (!db.objectStoreNames.contains(STORE_SETTINGS)) {
           db.createObjectStore(STORE_SETTINGS, { keyPath: 'key' });
+        }
+        if (!db.objectStoreNames.contains(STORE_SNAPSHOTS)) {
+          const snapshotStore = db.createObjectStore(STORE_SNAPSHOTS, { keyPath: 'id' });
+          snapshotStore.createIndex('by-planId', 'planId');
+          snapshotStore.createIndex('by-createdAt', 'createdAt');
         }
       },
     });
@@ -72,4 +83,27 @@ export async function getSettings(): Promise<UserSettings | null> {
 export async function clearSettings(): Promise<void> {
   const db = await getDB();
   await db.delete(STORE_SETTINGS, 'current');
+}
+
+export async function saveSnapshot(snapshot: PlanSnapshot): Promise<void> {
+  const db = await getDB();
+  await db.put(STORE_SNAPSHOTS, snapshot);
+}
+
+export async function getLatestSnapshot(planId: string): Promise<PlanSnapshot | null> {
+  const db = await getDB();
+  const snapshots = await db.getAllFromIndex(STORE_SNAPSHOTS, 'by-planId', planId);
+  if (snapshots.length === 0) return null;
+  snapshots.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  return snapshots[0];
+}
+
+export async function clearSnapshots(planId: string): Promise<void> {
+  const db = await getDB();
+  const snapshots = await db.getAllFromIndex(STORE_SNAPSHOTS, 'by-planId', planId);
+  const tx = db.transaction(STORE_SNAPSHOTS, 'readwrite');
+  for (const s of snapshots) {
+    await tx.store.delete(s.id);
+  }
+  await tx.done;
 }

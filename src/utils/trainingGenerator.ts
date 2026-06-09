@@ -262,6 +262,8 @@ export function generateTrainingPlan(config: TrainingConfig): TrainingPlan {
         description: finalDescription,
         notes: finalNotes,
         isModified: false,
+        isSkipped: false,
+        skipReason: null,
       });
     }
   }

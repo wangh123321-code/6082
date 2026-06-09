@@ -4,10 +4,14 @@ import {
   DayTraining,
   UserSettings,
   TrainingConfig,
+  SkipReason,
+  PlanSnapshot,
+  RescheduleResult,
 } from '@/types/training';
 import { generateTrainingPlan } from '@/utils/trainingGenerator';
 import { recalculateMileageWithConstraints } from '@/utils/mileageValidator';
-import { getToday } from '@/utils/dateUtils';
+import { rescheduleAfterSkip } from '@/utils/rescheduleEngine';
+import { getToday, generateId } from '@/utils/dateUtils';
 import * as db from '@/utils/indexedDB';
 
 interface TrainingState {
@@ -17,14 +21,18 @@ interface TrainingState {
   isLoading: boolean;
   isGenerating: boolean;
   isEditing: boolean;
+  rescheduleWarning: string | null;
 
   generatePlan: (targetTime: number, mileage: number) => Promise<void>;
   updateDayTraining: (dayId: string, updates: Partial<DayTraining>) => Promise<void>;
+  markDaySkip: (dayId: string, reason: SkipReason) => Promise<RescheduleResult>;
+  rollbackPlan: () => Promise<boolean>;
   selectDate: (date: string | null) => void;
   setIsEditing: (editing: boolean) => void;
   loadFromDB: () => Promise<void>;
   saveToDB: () => Promise<void>;
   clearPlan: () => Promise<void>;
+  clearRescheduleWarning: () => void;
 }
 
 export const useTrainingStore = create<TrainingState>((set, get) => ({
@@ -34,6 +42,7 @@ export const useTrainingStore = create<TrainingState>((set, get) => ({
   isLoading: false,
   isGenerating: false,
   isEditing: false,
+  rescheduleWarning: null,
 
   generatePlan: async (targetTime: number, mileage: number) => {
     set({ isGenerating: true });
@@ -50,7 +59,7 @@ export const useTrainingStore = create<TrainingState>((set, get) => ({
         initialWeeklyMileage: mileage,
         startDate,
       };
-      set({ plan, settings, selectedDate: null, isGenerating: false });
+      set({ plan, settings, selectedDate: null, isGenerating: false, rescheduleWarning: null });
     } catch (error) {
       console.error('Failed to generate training plan:', error);
       set({ isGenerating: false });
@@ -88,6 +97,59 @@ export const useTrainingStore = create<TrainingState>((set, get) => ({
     set({ plan: updatedPlan });
   },
 
+  markDaySkip: async (dayId: string, reason: SkipReason): Promise<RescheduleResult> => {
+    const { plan } = get();
+    if (!plan) {
+      return {
+        days: [],
+        weeklyMileage: [],
+        affectedDays: 0,
+        consecutiveLsdSkipped: false,
+      };
+    }
+
+    const snapshot: PlanSnapshot = {
+      id: generateId(),
+      planId: plan.id,
+      createdAt: new Date().toISOString(),
+      reason: reason === 'leave' ? '请假顺延' : '跳训顺延',
+      plan: JSON.parse(JSON.stringify(plan)),
+    };
+    await db.saveSnapshot(snapshot);
+
+    const result = rescheduleAfterSkip(plan.days, dayId, reason, plan.initialWeeklyMileage);
+
+    const updatedPlan: TrainingPlan = {
+      ...plan,
+      days: result.days,
+      weeklyMileage: result.weeklyMileage,
+    };
+
+    let warning: string | null = null;
+    if (result.consecutiveLsdSkipped) {
+      warning = '警告：您已连续跳过2次关键长距离训练（LSD），这可能导致耐力基础不足。建议避免再跳过长距离训练，必要时请考虑降低配速而非跳过。';
+    }
+
+    set({ plan: updatedPlan, rescheduleWarning: warning });
+    return result;
+  },
+
+  rollbackPlan: async (): Promise<boolean> => {
+    const { plan } = get();
+    if (!plan) return false;
+
+    try {
+      const snapshot = await db.getLatestSnapshot(plan.id);
+      if (!snapshot) return false;
+
+      set({ plan: snapshot.plan, selectedDate: null, rescheduleWarning: null });
+      return true;
+    } catch (error) {
+      console.error('Failed to rollback plan:', error);
+      return false;
+    }
+  },
+
   selectDate: (date: string | null) => {
     set({ selectedDate: date, isEditing: false });
   },
@@ -123,9 +185,13 @@ export const useTrainingStore = create<TrainingState>((set, get) => ({
   clearPlan: async () => {
     try {
       await Promise.all([db.clearAllPlans(), db.clearSettings()]);
-      set({ plan: null, settings: null, selectedDate: null });
+      set({ plan: null, settings: null, selectedDate: null, rescheduleWarning: null });
     } catch (error) {
       console.error('Failed to clear IndexedDB:', error);
     }
+  },
+
+  clearRescheduleWarning: () => {
+    set({ rescheduleWarning: null });
   },
 }));

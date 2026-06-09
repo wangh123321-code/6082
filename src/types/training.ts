@@ -25,6 +25,8 @@ export const TRAINING_TYPE_COLORS: Record<TrainingType, string> = {
   [TrainingType.CROSS]: '#8B5CF6',
 };
 
+export type SkipReason = 'leave' | 'skip';
+
 export interface DayTraining {
   id: string;
   date: string;
@@ -37,6 +39,8 @@ export interface DayTraining {
   description: string;
   notes: string[];
   isModified: boolean;
+  isSkipped: boolean;
+  skipReason: SkipReason | null;
 }
 
 export interface WeekMileage {
@@ -72,4 +76,19 @@ export interface TrainingConfig {
   targetTime: number;
   initialMileage: number;
   startDate: string;
+}
+
+export interface PlanSnapshot {
+  id: string;
+  planId: string;
+  createdAt: string;
+  reason: string;
+  plan: TrainingPlan;
+}
+
+export interface RescheduleResult {
+  days: DayTraining[];
+  weeklyMileage: WeekMileage[];
+  affectedDays: number;
+  consecutiveLsdSkipped: boolean;
 }
