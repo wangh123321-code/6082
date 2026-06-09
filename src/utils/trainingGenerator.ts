@@ -15,9 +15,9 @@ import { calculateMarathonPace, calculatePaceRange } from './paceCalculator';
 import { calculateAllWeeklyMileage } from './mileageValidator';
 
 const TOTAL_WEEKS = 16;
-const CUTBACK_WEEKS = [4, 8, 12];
-const PEAK_WEEKS = [10, 11];
-const TAPER_WEEKS = [15, 16];
+const CUTBACK_WEEKS = new Set([4, 8, 12]);
+const PEAK_WEEKS = new Set([10, 11]);
+const TAPER_WEEKS = new Set([15, 16]);
 
 interface WeeklySchedule {
   [dayOfWeek: number]: TrainingType;
@@ -102,26 +102,43 @@ function getTrainingNotes(type: TrainingType): string[] {
 }
 
 function generateWeeklyMileagePlan(initialMileage: number): number[] {
-  const weeklyMileage: number[] = [];
-  let current = initialMileage * 1.05;
+  const MAX_INCREASE = 0.1;
   const maxMileage = Math.min(initialMileage * 2.5, 120);
+  const weeklyMileage: number[] = [];
+  let prev = initialMileage;
 
   for (let week = 1; week <= TOTAL_WEEKS; week++) {
-    if (CUTBACK_WEEKS.includes(week)) {
-      weeklyMileage.push(Math.round(current * 0.65 * 10) / 10);
-    } else if (PEAK_WEEKS.includes(week)) {
-      const target = Math.min(maxMileage, current * 1.05);
-      weeklyMileage.push(Math.round(target * 10) / 10);
-      current = target;
-    } else if (TAPER_WEEKS.includes(week)) {
-      const taperFactor = week === 15 ? 0.6 : 0.4;
-      weeklyMileage.push(Math.round(weeklyMileage[13] * taperFactor * 10) / 10);
+    let target: number;
+
+    if (week === 1) {
+      target = prev * 1.05;
+    } else if (TAPER_WEEKS.has(week)) {
+      if (week === 15) {
+        target = weeklyMileage[13] * 0.6;
+      } else {
+        target = weeklyMileage[13] * 0.4;
+      }
+    } else if (CUTBACK_WEEKS.has(week)) {
+      const normalIncrease = Math.min(prev * 1.06, prev * (1 + MAX_INCREASE));
+      target = normalIncrease * 0.65;
+    } else if (PEAK_WEEKS.has(week)) {
+      target = Math.min(prev * 1.05, maxMileage);
     } else {
       const increaseRate = week <= 3 ? 0.08 : week <= 9 ? 0.06 : 0.04;
-      const target = Math.min(current * (1 + increaseRate), maxMileage);
-      weeklyMileage.push(Math.round(target * 10) / 10);
-      current = target;
+      target = prev * (1 + increaseRate);
     }
+
+    if (!TAPER_WEEKS.has(week) && !CUTBACK_WEEKS.has(week)) {
+      const maxAllowed = prev * (1 + MAX_INCREASE);
+      if (target > maxAllowed) {
+        target = maxAllowed;
+      }
+    }
+
+    target = Math.round(target * 10) / 10;
+    if (target < 0) target = 0;
+    weeklyMileage.push(target);
+    prev = target;
   }
 
   return weeklyMileage;
@@ -129,37 +146,40 @@ function generateWeeklyMileagePlan(initialMileage: number): number[] {
 
 function distributeDailyDistance(
   weekMileage: number,
-  weekNumber: number,
-  schedule: WeeklySchedule,
   isPeak: boolean,
   isTaper: boolean
 ): { [dayOfWeek: number]: number } {
   const distances: { [dayOfWeek: number]: number } = {};
   let remaining = weekMileage;
 
-  const lsdBase = isTaper ? 0.25 : isPeak ? 0.42 : 0.35;
-  const intervalBase = isTaper ? 0.1 : 0.15;
-  const tempoBase = isTaper ? 0.1 : 0.18;
+  if (weekMileage <= 0) {
+    for (let d = 0; d < 7; d++) distances[d] = 0;
+    return distances;
+  }
 
-  const lsdDistance = Math.max(8, Math.round(weekMileage * lsdBase * 10) / 10);
+  const lsdRatio = isTaper ? 0.25 : isPeak ? 0.42 : 0.35;
+  const intervalRatio = isTaper ? 0.1 : 0.15;
+  const tempoRatio = isTaper ? 0.1 : 0.18;
+
+  const lsdDistance = Math.max(8, Math.round(weekMileage * lsdRatio * 10) / 10);
   distances[6] = lsdDistance;
   remaining -= lsdDistance;
 
-  const intervalDistance = Math.max(3, Math.round(weekMileage * intervalBase * 10) / 10);
+  const intervalDistance = Math.max(3, Math.round(weekMileage * intervalRatio * 10) / 10);
   distances[2] = intervalDistance;
   remaining -= intervalDistance;
 
-  const tempoDistance = Math.max(4, Math.round(weekMileage * tempoBase * 10) / 10);
+  const tempoDistance = Math.max(4, Math.round(weekMileage * tempoRatio * 10) / 10);
   distances[4] = tempoDistance;
   remaining -= tempoDistance;
 
-  const easyDays = [1, 3, 5].filter((d) => schedule[d] === TrainingType.EASY);
+  const easyDays = [1, 3, 5];
   const perEasyDay = Math.max(3, Math.round((remaining / easyDays.length) * 10) / 10);
 
   for (let i = 0; i < easyDays.length; i++) {
     const day = easyDays[i];
     if (i === easyDays.length - 1) {
-      distances[day] = Math.round(remaining * 10) / 10;
+      distances[day] = Math.round(Math.max(0, remaining) * 10) / 10;
     } else {
       distances[day] = perEasyDay;
       remaining -= perEasyDay;
@@ -167,7 +187,6 @@ function distributeDailyDistance(
   }
 
   distances[0] = 0;
-
   return distances;
 }
 
@@ -178,13 +197,11 @@ export function generateTrainingPlan(config: TrainingConfig): TrainingPlan {
   const days: DayTraining[] = [];
 
   for (let week = 1; week <= TOTAL_WEEKS; week++) {
-    const isPeak = PEAK_WEEKS.includes(week);
-    const isTaper = TAPER_WEEKS.includes(week);
+    const isPeak = PEAK_WEEKS.has(week);
+    const isTaper = TAPER_WEEKS.has(week);
     const weekStart = addDays(parseDate(startDate), (week - 1) * 7);
     const dailyDistances = distributeDailyDistance(
       weeklyMileagePlan[week - 1],
-      week,
-      DEFAULT_SCHEDULE,
       isPeak,
       isTaper
     );
@@ -197,11 +214,13 @@ export function generateTrainingPlan(config: TrainingConfig): TrainingPlan {
       const isRaceDay = week === 16 && dayOfWeek === 6;
 
       let finalType = type;
+      let finalDistance = distance;
       let finalDescription = getTrainingDescription(type, distance);
       let finalNotes = getTrainingNotes(type);
 
       if (isRaceDay) {
         finalType = TrainingType.LSD;
+        finalDistance = 42.195;
         finalDescription = '比赛日！享受42.195公里的旅程，按照自己的配速稳定前进。';
         finalNotes = [
           '赛前3小时完成早餐，避免尝试新食物',
@@ -212,17 +231,20 @@ export function generateTrainingPlan(config: TrainingConfig): TrainingPlan {
         ];
       }
 
-      if (week === 16 && dayOfWeek >= 3) {
+      if (week === 16 && dayOfWeek >= 3 && !isRaceDay) {
         if (dayOfWeek === 3) {
           finalType = TrainingType.EASY;
+          finalDistance = 6;
           finalDescription = '赛前调整：轻松慢跑6公里，保持身体状态。';
           finalNotes = ['配速要慢，主要是活动筋骨', '注意保暖', '早点休息'];
         } else if (dayOfWeek === 4) {
           finalType = TrainingType.REST;
+          finalDistance = 0;
           finalDescription = '赛前休息，整理装备，调整心态。';
           finalNotes = ['检查比赛装备是否齐全', '准备早餐和补给', '晚上早点休息'];
         } else if (dayOfWeek === 5) {
           finalType = TrainingType.REST;
+          finalDistance = 0;
           finalDescription = '赛前完全休息，养精蓄锐。';
           finalNotes = ['放松心情，可适当散步', '保证充足睡眠', '设定好闹钟'];
         }
@@ -234,7 +256,7 @@ export function generateTrainingPlan(config: TrainingConfig): TrainingPlan {
         weekNumber: week,
         dayOfWeek,
         type: finalType,
-        distance: isRaceDay ? 42.195 : distance,
+        distance: finalDistance,
         paceMin: isRaceDay ? marathonPace : paceRange.min,
         paceMax: isRaceDay ? marathonPace + 0.5 : paceRange.max,
         description: finalDescription,

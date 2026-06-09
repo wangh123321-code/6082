@@ -1,22 +1,18 @@
 import { useState } from 'react';
 import { Play, Trash2, Loader2 } from 'lucide-react';
 import { useTrainingStore } from '@/store/useTrainingStore';
-import { useIndexedDB } from '@/hooks/useIndexedDB';
 
 export default function InputForm() {
   const [hours, setHours] = useState<string>('4');
   const [minutes, setMinutes] = useState<string>('30');
   const [mileage, setMileage] = useState<string>('30');
-  
-  const { 
-    generatePlan, 
-    clearPlan, 
+
+  const {
+    generatePlan,
+    clearPlan,
     isGenerating,
     plan,
-    saveToDB 
   } = useTrainingStore();
-  
-  const { savePlan, saveSettings, clearAllPlans, clearSettings } = useIndexedDB();
 
   const handleGenerate = async () => {
     const targetHours = parseInt(hours, 10) || 0;
@@ -35,12 +31,11 @@ export default function InputForm() {
     }
 
     await generatePlan(targetTotalMinutes, weeklyMileage);
-    await saveToDB(savePlan, saveSettings);
   };
 
   const handleClear = async () => {
     if (window.confirm('确定要清除当前训练计划吗？')) {
-      await clearPlan(clearAllPlans, clearSettings);
+      await clearPlan();
     }
   };
 
@@ -57,7 +52,7 @@ export default function InputForm() {
             重新生成
           </button>
         </div>
-        
+
         <div className="grid grid-cols-3 gap-4">
           <div className="bg-white/10 rounded-xl p-4">
             <p className="text-white/70 text-xs mb-1">目标完赛</p>
@@ -83,7 +78,7 @@ export default function InputForm() {
   return (
     <div className="bg-gradient-to-br from-primary-500 to-primary-700 rounded-2xl p-6 text-white shadow-xl">
       <h3 className="text-lg font-bold mb-4">生成你的训练计划</h3>
-      
+
       <div className="space-y-4">
         <div>
           <label className="block text-sm text-white/80 mb-2">目标完赛时间</label>

@@ -7,7 +7,6 @@ import TrainingCalendar from '@/components/calendar/TrainingCalendar';
 import TrainingDetailModal from '@/components/modal/TrainingDetailModal';
 import TrainingEditModal from '@/components/modal/TrainingEditModal';
 import { useTrainingStore } from '@/store/useTrainingStore';
-import { useIndexedDB } from '@/hooks/useIndexedDB';
 import { DayTraining } from '@/types/training';
 
 export default function Home() {
@@ -23,22 +22,16 @@ export default function Home() {
     saveToDB,
   } = useTrainingStore();
 
-  const {
-    getLatestPlan,
-    getSettings,
-    savePlan,
-    saveSettings,
-  } = useIndexedDB();
-
   useEffect(() => {
-    loadFromDB(getLatestPlan, getSettings);
-  }, [loadFromDB, getLatestPlan, getSettings]);
+    loadFromDB();
+  }, [loadFromDB]);
 
+  const planId = plan?.id;
   useEffect(() => {
-    if (plan) {
-      saveToDB(savePlan, saveSettings);
+    if (planId) {
+      saveToDB();
     }
-  }, [plan, saveToDB, savePlan, saveSettings]);
+  }, [planId, saveToDB]);
 
   const selectedDay = plan?.days.find((d) => d.date === selectedDate);
 
@@ -76,7 +69,7 @@ export default function Home() {
   return (
     <div className="relative min-h-screen">
       <div className="grain-overlay" />
-      
+
       <div className="relative z-10 max-w-7xl mx-auto px-4 py-8">
         <header className="mb-8">
           <div className="flex items-center gap-3 mb-2">

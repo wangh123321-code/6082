@@ -8,6 +8,7 @@ import {
 import { generateTrainingPlan } from '@/utils/trainingGenerator';
 import { recalculateMileageWithConstraints } from '@/utils/mileageValidator';
 import { getToday } from '@/utils/dateUtils';
+import * as db from '@/utils/indexedDB';
 
 interface TrainingState {
   plan: TrainingPlan | null;
@@ -18,24 +19,12 @@ interface TrainingState {
   isEditing: boolean;
 
   generatePlan: (targetTime: number, mileage: number) => Promise<void>;
-  updateDayTraining: (
-    dayId: string,
-    updates: Partial<DayTraining>
-  ) => Promise<void>;
+  updateDayTraining: (dayId: string, updates: Partial<DayTraining>) => Promise<void>;
   selectDate: (date: string | null) => void;
   setIsEditing: (editing: boolean) => void;
-  loadFromDB: (
-    getPlan: () => Promise<TrainingPlan | null>,
-    getSettings: () => Promise<UserSettings | null>
-  ) => Promise<void>;
-  saveToDB: (
-    savePlan: (plan: TrainingPlan) => Promise<void>,
-    saveSettings: (settings: UserSettings) => Promise<void>
-  ) => Promise<void>;
-  clearPlan: (
-    clearPlans: () => Promise<void>,
-    clearSettings: () => Promise<void>
-  ) => Promise<void>;
+  loadFromDB: () => Promise<void>;
+  saveToDB: () => Promise<void>;
+  clearPlan: () => Promise<void>;
 }
 
 export const useTrainingStore = create<TrainingState>((set, get) => ({
@@ -61,17 +50,14 @@ export const useTrainingStore = create<TrainingState>((set, get) => ({
         initialWeeklyMileage: mileage,
         startDate,
       };
-      set({ plan, settings, isGenerating: false });
+      set({ plan, settings, selectedDate: null, isGenerating: false });
     } catch (error) {
       console.error('Failed to generate training plan:', error);
       set({ isGenerating: false });
     }
   },
 
-  updateDayTraining: async (
-    dayId: string,
-    updates: Partial<DayTraining>
-  ) => {
+  updateDayTraining: async (dayId: string, updates: Partial<DayTraining>) => {
     const { plan } = get();
     if (!plan) return;
 
@@ -110,15 +96,12 @@ export const useTrainingStore = create<TrainingState>((set, get) => ({
     set({ isEditing: editing });
   },
 
-  loadFromDB: async (
-    getPlan: () => Promise<TrainingPlan | null>,
-    getSettings: () => Promise<UserSettings | null>
-  ) => {
+  loadFromDB: async () => {
     set({ isLoading: true });
     try {
       const [plan, settings] = await Promise.all([
-        getPlan(),
-        getSettings(),
+        db.getLatestPlan(),
+        db.getSettings(),
       ]);
       set({ plan, settings, isLoading: false });
     } catch (error) {
@@ -127,25 +110,19 @@ export const useTrainingStore = create<TrainingState>((set, get) => ({
     }
   },
 
-  saveToDB: async (
-    savePlan: (plan: TrainingPlan) => Promise<void>,
-    saveSettings: (settings: UserSettings) => Promise<void>
-  ) => {
+  saveToDB: async () => {
     const { plan, settings } = get();
     try {
-      if (plan) await savePlan(plan);
-      if (settings) await saveSettings(settings);
+      if (plan) await db.savePlan(plan);
+      if (settings) await db.saveSettings(settings);
     } catch (error) {
       console.error('Failed to save to IndexedDB:', error);
     }
   },
 
-  clearPlan: async (
-    clearPlans: () => Promise<void>,
-    clearSettings: () => Promise<void>
-  ) => {
+  clearPlan: async () => {
     try {
-      await Promise.all([clearPlans(), clearSettings()]);
+      await Promise.all([db.clearAllPlans(), db.clearSettings()]);
       set({ plan: null, settings: null, selectedDate: null });
     } catch (error) {
       console.error('Failed to clear IndexedDB:', error);

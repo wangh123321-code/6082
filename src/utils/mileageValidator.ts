@@ -50,79 +50,74 @@ export function calculateAllWeeklyMileage(
   return weeklyData;
 }
 
+function adjustDayDistance(day: DayTraining, factor: number): DayTraining {
+  if (day.type === TrainingType.REST) return day;
+  const newDist = Math.round(day.distance * factor * 10) / 10;
+  return {
+    ...day,
+    distance: Math.max(newDist, day.type === TrainingType.LSD ? 8 : day.type === TrainingType.INTERVAL ? 3 : day.type === TrainingType.TEMPO ? 4 : 3),
+  };
+}
+
 export function recalculateMileageWithConstraints(
   days: DayTraining[],
   modifiedDayId: string,
   initialMileage: number
 ): { days: DayTraining[]; weeklyMileage: WeekMileage[] } {
-  const newDays = [...days];
+  const newDays = days.map((d) => ({ ...d }));
   const modifiedIndex = newDays.findIndex((d) => d.id === modifiedDayId);
-  
+
   if (modifiedIndex === -1) {
     return { days: newDays, weeklyMileage: calculateAllWeeklyMileage(newDays, initialMileage) };
   }
 
   const modifiedDay = newDays[modifiedIndex];
   const startWeek = modifiedDay.weekNumber;
-  let prevMileage = startWeek === 1 
-    ? initialMileage 
-    : calculateWeeklyMileage(newDays, startWeek - 1);
 
   for (let week = startWeek; week <= 16; week++) {
-    const weekDays = newDays.filter((d) => d.weekNumber === week);
-    let currentTotal = weekDays.reduce((sum, d) => sum + d.distance, 0);
-    const maxAllowed = prevMileage * (1 + MAX_INCREASE_RATE);
-    const isTaperWeek = week >= 15;
-    const isCutbackWeek = week === 4 || week === 8 || week === 12;
-
-    if (week > startWeek && currentTotal > maxAllowed && !isTaperWeek && !isCutbackWeek) {
-      const excess = currentTotal - maxAllowed;
-      let remainingExcess = excess;
-      
-      const sortedDays = [...weekDays]
-        .filter((d) => !d.isModified && d.type === TrainingType.EASY)
-        .sort((a, b) => b.distance - a.distance);
-
-      for (const day of sortedDays) {
-        if (remainingExcess <= 0) break;
-        const dayIndex = newDays.findIndex((d) => d.id === day.id);
-        if (dayIndex !== -1) {
-          const reduction = Math.min(remainingExcess, newDays[dayIndex].distance - 1);
-          if (reduction > 0) {
-            newDays[dayIndex] = {
-              ...newDays[dayIndex],
-              distance: Math.round((newDays[dayIndex].distance - reduction) * 10) / 10,
-            };
-            remainingExcess -= reduction;
-          }
-        }
-      }
-
-      if (remainingExcess > 0) {
-        const allWeekDays = [...weekDays]
-          .filter((d) => !d.isModified && d.type !== TrainingType.LSD)
-          .sort((a, b) => b.distance - a.distance);
-        
-        for (const day of allWeekDays) {
-          if (remainingExcess <= 0) break;
-          const dayIndex = newDays.findIndex((d) => d.id === day.id);
-          if (dayIndex !== -1) {
-            const reduction = Math.min(remainingExcess, newDays[dayIndex].distance - 1);
-            if (reduction > 0) {
-              newDays[dayIndex] = {
-                ...newDays[dayIndex],
-                distance: Math.round((newDays[dayIndex].distance - reduction) * 10) / 10,
-              };
-              remainingExcess -= reduction;
-            }
-          }
-        }
-      }
-
-      currentTotal = maxAllowed;
+    let prevMileage: number;
+    if (week === 1) {
+      prevMileage = initialMileage;
+    } else {
+      prevMileage = calculateWeeklyMileage(newDays, week - 1);
     }
 
-    prevMileage = currentTotal;
+    const isCutbackWeek = week === 4 || week === 8 || week === 12;
+    const isTaperWeek = week >= 15;
+
+    if (isCutbackWeek || isTaperWeek) continue;
+
+    const currentTotal = calculateWeeklyMileage(newDays, week);
+    const maxAllowed = prevMileage * (1 + MAX_INCREASE_RATE);
+
+    if (currentTotal > maxAllowed) {
+      const scaleFactor = maxAllowed / currentTotal;
+      const weekDayIndices = newDays
+        .map((d, i) => ({ d, i }))
+        .filter(({ d }) => d.weekNumber === week && d.type !== TrainingType.REST && !d.isModified);
+
+      const nonLsd = weekDayIndices.filter(({ d }) => d.type !== TrainingType.LSD);
+      const lsd = weekDayIndices.filter(({ d }) => d.type === TrainingType.LSD);
+
+      for (const { i } of nonLsd) {
+        newDays[i] = adjustDayDistance(newDays[i], scaleFactor);
+      }
+
+      const newTotalNonLsd = newDays
+        .filter((d) => d.weekNumber === week && d.type !== TrainingType.LSD && d.type !== TrainingType.REST)
+        .reduce((s, d) => s + d.distance, 0);
+
+      const lsdBudget = maxAllowed - newTotalNonLsd;
+      if (lsdBudget > 0 && lsd.length > 0) {
+        for (const { i } of lsd) {
+          const perLsd = lsdBudget / lsd.length;
+          newDays[i] = {
+            ...newDays[i],
+            distance: Math.round(Math.max(8, perLsd) * 10) / 10,
+          };
+        }
+      }
+    }
   }
 
   const weeklyMileage = calculateAllWeeklyMileage(newDays, initialMileage);
